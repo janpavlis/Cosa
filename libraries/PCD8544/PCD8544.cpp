@@ -34,10 +34,8 @@ const uint8_t PCD8544::script[] __PROGMEM = {
 };
 
 PCD8544::PCD8544(LCD::IO* io, Board::DigitalPin dc, Font* font) :
-  LCD::Device(),
-  m_io(io),
-  m_dc(dc, 1),
-  m_font(font)
+    UniversalLcd(io, font),
+  m_dc(dc, 1)
 {
 }
 
@@ -272,4 +270,16 @@ PCD8544::putchar(char c)
   m_io->end();
 
   return (c);
+}
+
+uint16_t
+PCD8544::width_pixels()
+{
+    return WIDTH;
+}
+
+uint16_t
+PCD8544::height_pixels()
+{
+    return HEIGHT;
 }

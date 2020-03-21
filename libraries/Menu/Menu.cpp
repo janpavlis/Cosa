@@ -21,273 +21,282 @@
 #include "Menu.hh"
 
 void
-Menu::print(IOStream& outs, Menu::one_of_P var)
+Menu::Walker::print_menu()
 {
-  uint16_t ix = *((uint16_t*) pgm_read_word(&var->value));
-  item_vec_P list = (item_vec_P) pgm_read_word(&var->list);
-  item_P item = (item_P) pgm_read_word(&list[ix]);
-  outs << (str_P) pgm_read_word(&item->name);
+	m_display.text_mode(LCD::Device::TextMode::NORMAL_TEXT_MODE);
+	m_display.display_clear();
+
+	// Access the current state of the menu walker
+	Menu::item_list_P menu = m_stack[m_top];
+	Menu::item_vec_P list = (Menu::item_vec_P) pgm_read_word(&menu->list);
+
+	for (uint8_t i = m_scroll; i < m_scroll + m_display.height_characters() && ((Menu::item_P) pgm_read_word(&list[i])) != nullptr; i++)
+	{
+		Menu::item_P item = (Menu::item_P) pgm_read_word(&list[i]);
+		Menu::type_t type = (Menu::type_t) pgm_read_byte(&item->type);
+
+		//m_display.set_cursor(0, i - m_scroll);
+
+		str_P value_pgm = NULL;
+		char value[7] = "";
+
+		// Print possible value of current menu item
+		switch (type) {
+		case Menu::CHECKBOX: {
+			bool val = *((bool*)pgm_read_word(&((Menu::checkbox_P)item)->value));
+			if (val)
+				value_pgm = PSTR("[X]");
+			else
+				value_pgm = PSTR("[ ]");
+			break;
+		}
+		case Menu::TEXT:
+			break;
+		case Menu::ONE_OF: {
+			// get the one-of variable value string
+			uint16_t ix = *((uint16_t*)pgm_read_word(&((Menu::one_of_P)item)->value));
+			item_vec_P list = (item_vec_P)pgm_read_word(&((Menu::one_of_P)item)->list);
+			value_pgm = (str_P)pgm_read_word(&((item_P)pgm_read_word(&list[ix]))->name);
+			break;
+		}
+		case Menu::INT_RANGE: {
+			// Get value of range variable
+			int16_t* vp = (int16_t*)pgm_read_word(&((Menu::int_range_P)item)->value);
+			int val = *vp;
+			itoa(val, value, 10);
+			break;
+		}
+		case Menu::ITEM_LIST:
+			value_pgm = PSTR("...");
+			break;
+		default:
+			;
+		}
+
+		Menu::print_item(m_display_stream, m_display, (str_P)pgm_read_word(&item->name), value_pgm, value, i == m_ix, m_is_edit_mode);
+	}
 }
 
 void
-Menu::print(IOStream& outs, zero_or_many_P var, bool selected, uint8_t bv)
+Menu::print_item(IOStream& outs, UniversalLcd& lcd, str_P name, str_P value_pgm, const char* value, bool is_selected, bool is_edited)
 {
-  if (UNLIKELY(!selected)) return;
-  uint16_t value = *((uint16_t*) pgm_read_word(&var->value));
-  item_vec_P list = (item_vec_P) pgm_read_word(&var->list);
-  item_P item = (item_P) pgm_read_word(&list[bv]);
-  if (value & _BV(bv))
-    outs << PSTR("[x] ");
-  else outs << PSTR("[ ] ");
-  outs << (str_P) pgm_read_word(&item->name);
-}
+	if (is_selected && !is_edited)
+		lcd.text_mode(LCD::Device::TextMode::INVERTED_TEXT_MODE);
+	else
+		lcd.text_mode(LCD::Device::TextMode::NORMAL_TEXT_MODE);
 
-void
-Menu::print(IOStream& outs, int_range_P var, bool selected)
-{
-  int16_t* vp = (int16_t*) pgm_read_word(&var->value);
-  int16_t value = *vp;
-  outs << value;
-  if (UNLIKELY(!selected)) return;
-  outs << PSTR(" [")
-       << (int16_t) pgm_read_word(&var->low)
-       << PSTR("..")
-       << (int16_t) pgm_read_word(&var->high)
-       << PSTR("]");
-}
+	if(strlen_P(name) < lcd.width_characters())
+		outs.print(name);
+	else
+	{
+		lcd.write_P(name, lcd.width_characters());
+		return;
+	}
 
-IOStream&
-operator<<(IOStream& outs, Menu::Walker& walker)
-{
-  // Access the current state of the menu walker
-  Menu::item_list_P menu = walker.m_stack[walker.m_top];
-  Menu::item_vec_P list = (Menu::item_vec_P) pgm_read_word(&menu->list);
-  Menu::item_P item = &menu->item;
-  Menu::type_t type;
+	int8_t spaces = lcd.width_characters() - strlen_P(name) - (value_pgm != NULL ? strlen_P(value_pgm) : 0) - (value != NULL ? strlen(value) : 0);
 
-  // Print asterics to mark selection
-  if (walker.m_selected) outs << '*';
+	if (spaces >= 0)
+	{
+		for (int i = 0; i < spaces; i++)
+			outs.print(PSTR(" "));
 
-  // Print the name of the current menu item with parent
-  outs << (str_P) pgm_read_word(&item->name) << ':';
-  item = (Menu::item_P) pgm_read_word(&list[walker.m_ix]);
-  outs << (str_P) pgm_read_word(&item->name) << endl;
-  type = (Menu::type_t) pgm_read_byte(&item->type);
+		if (is_selected)
+			lcd.text_mode(LCD::Device::TextMode::INVERTED_TEXT_MODE);
+		else
+			lcd.text_mode(LCD::Device::TextMode::NORMAL_TEXT_MODE);
 
-  // Print possible value of current menu item
-  switch (type) {
-  case Menu::ONE_OF:
-    // Print the one-of variable value string
-    Menu::print(outs, (Menu::one_of_P) item);
-    break;
-  case Menu::ZERO_OR_MANY:
-    // Print the zero-or-many variable when selected
-    Menu::print(outs, (Menu::zero_or_many_P) item,
-		walker.m_selected, walker.m_bv);
-    break;
-  case Menu::INT_RANGE:
-    // Print the range variable and limits when selected
-    Menu::print(outs, (Menu::int_range_P) item, walker.m_selected);
-    break;
-  default:
-    ;
-  }
-  return (outs);
+		if (value != NULL)
+			outs.print(value);
+		if (value_pgm != NULL)
+			outs.print(value_pgm);
+	}
 }
 
 void
 Menu::Walker::on_key_down(uint8_t nr)
 {
-  // Access the current menu item
-  Menu::item_list_P menu = m_stack[m_top];
-  Menu::item_vec_P list = (Menu::item_vec_P) pgm_read_word(&menu->list);
-  Menu::item_P item = (Menu::item_P) pgm_read_word(&list[m_ix]);
-  Menu::type_t type = (Menu::type_t) pgm_read_byte(&item->type);
+	// Access the current menu item
+	Menu::item_list_P menu = m_stack[m_top];
+	Menu::item_vec_P list = (Menu::item_vec_P) pgm_read_word(&menu->list);
+	Menu::item_P item = (Menu::item_P) pgm_read_word(&list[m_ix]);
+	Menu::type_t type = (Menu::type_t) pgm_read_byte(&item->type);
 
-  // React to key event
-  switch (nr) {
-  case NO_KEY:
-    break;
-  case SELECT_KEY:
-  case RIGHT_KEY:
-    switch (type) {
-    case Menu::ZERO_OR_MANY:
-      // Select zero-or-many variable or toggle current item
-      {
-	if (!m_selected) {
-	  m_selected = true;
-	  m_bv = 0;
-	  break;
-	}
-	Menu::zero_or_many_P var = (Menu::zero_or_many_P) item;
-	uint16_t* vp = (uint16_t*) pgm_read_word(&var->value);
-	list = (Menu::item_vec_P) pgm_read_word(&var->list);
-	item = (Menu::item_P) pgm_read_word(&list[m_bv]);
-	uint16_t value = *vp;
-	if ((value & _BV(m_bv)) == 0)
-	  *vp = (value | _BV(m_bv));
-	else
-	  *vp = (value & ~_BV(m_bv));
-      }
-      break;
-    case Menu::ITEM_LIST:
-      // Walk into sub-menu
-      {
-	m_stack[++m_top] = (Menu::item_list_P) item;
-	m_ix = 0;
-      }
-      break;
-    case Menu::ACTION:
-      // Execute action and fall back to menu root
-      {
-	Menu::action_P action = (Menu::action_P) item;
-	Menu::Action* obj = (Menu::Action*) pgm_read_word(&action->obj);
-	bool res = obj->run(item);
-	m_top = 0;
-	m_ix = 0;
-	if (!res) return;
-      }
-      break;
-    default:
-      // Enter item modification mode
-      m_selected = !m_selected;
-      m_bv = 0;
-    }
-    break;
-  case LEFT_KEY:
-    // Exit item modification mode or walk back
-    if (m_selected) {
-      m_selected = false;
-    }
-    else if (m_top > 0) {
-      m_top -= 1;
-      m_ix = 0;
-    }
-    break;
-  case DOWN_KEY:
-    // Step to the next menu item or value in item modification mode
-    if (!m_selected) {
-      m_ix += 1;
-      item = (Menu::item_P) pgm_read_word(&list[m_ix]);
-      if (item == NULL) m_ix -= 1;
-    }
-    else {
-      switch (type) {
-      case Menu::ONE_OF:
-	// Step to the next enumeration value
-	{
-	  Menu::one_of_P evar = (Menu::one_of_P) item;
-	  uint16_t* vp = (uint16_t*) pgm_read_word(&evar->value);
-	  uint16_t value = *vp + 1;
-	  list = (Menu::item_vec_P) pgm_read_word(&evar->list);
-	  item = (Menu::item_P) pgm_read_word(&list[value]);
-	  if (item == NULL) break;
-	  *vp = value;
-	}
-	break;
-      case Menu::ZERO_OR_MANY:
-	// Step to the next item
-	{
-	  Menu::zero_or_many_P bitset = (Menu::zero_or_many_P) item;
-	  list = (Menu::item_vec_P) pgm_read_word(&bitset->list);
-	  item = (Menu::item_P) pgm_read_word(&list[m_bv + 1]);
-	  if (item == NULL) break;
-	  m_bv += 1;
-	}
-	break;
-      case Menu::INT_RANGE:
-	// Decrement the integer variable if within the range
-	{
-	  Menu::int_range_P range = (Menu::int_range_P) item;
-	  int16_t* vp = (int16_t*) pgm_read_word(&range->value);
-	  int value = *vp;
-	  int low = (int) pgm_read_word(&range->low);
-	  if (value == low) break;
-	  *vp = value - 1;
-	}
-	break;
-      default:
-	;
-      }
-    }
-    break;
-  case UP_KEY:
-    // Step to the previous menu item or value in item modification mode
-    if (!m_selected) {
-      if (m_ix > 0)
-	m_ix -= 1;
-      else if (m_top > 0) {
-	m_top -= 1;
-      }
-    }
-    else {
-      switch (type) {
-      case Menu::ONE_OF:
-	// Step to the previous enumeration value
-	{
-	  Menu::one_of_P evar = (Menu::one_of_P) item;
-	  uint16_t* vp = (uint16_t*) pgm_read_word(&evar->value);
-	  uint16_t value = *vp;
-	  if (value == 0) break;
-	  value -= 1;
-	  list = (Menu::item_vec_P) pgm_read_word(&evar->list);
-	  item = (Menu::item_P) pgm_read_word(&list[value]);
-	  *vp = value;
-	}
-	break;
-      case Menu::ZERO_OR_MANY:
-	// Step to the previous bitset value
-	{
-	  if (m_bv == 0) {
-	    m_selected = 0;
-	    break;
-	  }
-	  m_bv -= 1;
-	}
-	break;
-      case Menu::INT_RANGE:
-	// Increment the integer variable in within range
-	{
-	  Menu::int_range_P range = (Menu::int_range_P) item;
-	  int16_t* vp = (int16_t*) pgm_read_word(&range->value);
-	  int value = *vp;
-	  int high = (int) pgm_read_word(&range->high);
-	  if (value == high) break;
-	  *vp = value + 1;
-	}
-	break;
-      default:
-	;
-      }
-    }
-    break;
-  }
+	// React to key event
+	switch (nr) {
+	case NO_KEY:
+		break;
+	case SELECT_KEY:
+	case RIGHT_KEY:
+		switch (type) {
+		case Menu::GO_TO_PARENT:
+			if (m_top > 0) {
+				m_top--;
+				m_scroll = 0;
+			}
+			break;
+		case Menu::TEXT:
+			break;
+		case Menu::ITEM_LIST: {
+			// Walk into sub-menu
+			m_stack[++m_top] = (Menu::item_list_P) item;
+			m_scroll = 0;
+			m_ix = 0;
+		}
+		break;
+		case Menu::ACTION: {
+			// Execute action and fall back to menu root
+			Menu::action_P action = (Menu::action_P) item;
+			Menu::Action* obj = (Menu::Action*) pgm_read_word(&action->obj);
+			bool res = obj->run(item);
+			m_top = 0;
+			m_scroll = 0;
+			m_ix = 0;
+			if (!res)
+				return;
+			break;
+		}
+		case Menu::ONE_OF: {
+			bool edit_mode_enabled = ((bool)pgm_read_byte(&((Menu::one_of_P)item)->edit_mode_enabled));
+			
+			if (edit_mode_enabled)
+			{
+				m_is_edit_mode = !m_is_edit_mode;
+			}
+			else
+			{
+				uint16_t* val_p = ((uint16_t*)pgm_read_word(&((Menu::one_of_P)item)->value));
+				*val_p = (*val_p + 1);
 
-  // Display the new walker state
-  m_out << clear << *this;
+				Menu::item_vec_P list = (Menu::item_vec_P) pgm_read_word(&((Menu::one_of_P)item)->list);
+				if((Menu::item_P) pgm_read_word(&list[*val_p]) == NULL)
+					*val_p = 0;;
+			}
+			break;
+		}
+		case Menu::CHECKBOX: {
+			bool* val_p = ((bool*)pgm_read_word(&((Menu::checkbox_P)item)->value));
+			*val_p = !(*val_p);
+			break;
+		}
+		default:
+			// Enter item modification mode
+			m_is_edit_mode = !m_is_edit_mode;
+			break;
+		}
+		break;
+	case LEFT_KEY:
+		// Exit item modification mode or walk back
+		if (m_is_edit_mode) {
+			m_is_edit_mode = false;
+		}
+		else if (m_top > 0) {
+			m_top--;
+			m_scroll = 0;
+			m_ix = 0;
+		}
+		break;
+	case DOWN_KEY:
+		// Step to the next menu item or value in item modification mode
+		if (!m_is_edit_mode) {
+			if (m_ix > 0) {
+				if (m_ix == m_scroll)
+					m_scroll--;
+				m_ix--;
+			}
+		}
+		else {
+			switch (type) {
+			case Menu::ONE_OF: {
+				// Step to the next enumeration value
+				Menu::one_of_P evar = (Menu::one_of_P) item;
+				uint16_t* vp = (uint16_t*)pgm_read_word(&evar->value);
+				uint16_t value = *vp;
+				if (value == 0) break;
+				value -= 1;
+				list = (Menu::item_vec_P) pgm_read_word(&evar->list);
+				item = (Menu::item_P) pgm_read_word(&list[value]);
+				*vp = value;
+			}
+			break;
+			case Menu::INT_RANGE: {
+				// Decrement the integer variable if within the range
+				Menu::int_range_P range = (Menu::int_range_P) item;
+				int16_t* vp = (int16_t*)pgm_read_word(&range->value);
+				int value = *vp;
+				int high = (int)pgm_read_word(&range->high);
+				if (value == high) break;
+				*vp = value + 1;
+			}
+			break;
+			default:
+				;
+			}
+		}
+		break;
+	case UP_KEY:
+		// Step to the previous menu item or value in item modification mode
+		if (!m_is_edit_mode) {
+			if ((Menu::item_P) pgm_read_word(&list[m_ix + 1]) != NULL) {
+				if (m_ix - m_scroll == m_display.height_characters() - 1)
+					m_scroll++;
+				m_ix++;
+			}
+		}
+		else {
+			switch (type) {
+			case Menu::ONE_OF: {
+				// Step to the previous enumeration value
+				Menu::one_of_P evar = (Menu::one_of_P) item;
+				uint16_t* vp = (uint16_t*)pgm_read_word(&evar->value);
+				uint16_t value = *vp + 1;
+				list = (Menu::item_vec_P) pgm_read_word(&evar->list);
+				item = (Menu::item_P) pgm_read_word(&list[value]);
+				if (item == NULL) break;
+				*vp = value;
+			}
+			break;
+			case Menu::INT_RANGE: {
+				// Increment the integer variable in within range
+				Menu::int_range_P range = (Menu::int_range_P) item;
+				int16_t* vp = (int16_t*)pgm_read_word(&range->value);
+				int value = *vp;
+				int low = (int)pgm_read_word(&range->low);
+				if (value == low) break;
+				*vp = value - 1;
+			}
+			break;
+			default:
+				;
+			}
+		}
+		break;
+	}
+
+	// Display the new walker state
+	print_menu();
 }
 
 Menu::type_t
 Menu::Walker::type()
 {
-  if (!m_selected) return (ITEM_LIST);
-  Menu::item_list_P menu = m_stack[m_top];
-  Menu::item_vec_P list = (Menu::item_vec_P) pgm_read_word(&menu->list);
-  Menu::item_P item = (Menu::item_P) pgm_read_word(&list[m_ix]);
-  Menu::type_t type = (Menu::type_t) pgm_read_byte(&item->type);
-  return (type);
+	if (!m_is_edit_mode) return (ITEM_LIST);
+	Menu::item_list_P menu = m_stack[m_top];
+	Menu::item_vec_P list = (Menu::item_vec_P) pgm_read_word(&menu->list);
+	Menu::item_P item = (Menu::item_P) pgm_read_word(&list[m_ix]);
+	Menu::type_t type = (Menu::type_t) pgm_read_byte(&item->type);
+	return (type);
 }
 
 void
 Menu::RotaryController::on_event(uint8_t type, uint16_t direction)
 {
-  UNUSED(type);
-  if (m_walker->type() == Menu::INT_RANGE)
-    m_walker->on_key_down(direction == CW ?
-			  Menu::Walker::UP_KEY :
-			  Menu::Walker::DOWN_KEY);
-  else
-    m_walker->on_key_down(direction == CW ?
-			  Menu::Walker::DOWN_KEY :
-			  Menu::Walker::UP_KEY);
+	UNUSED(type);
+	if (m_walker->type() == Menu::INT_RANGE)
+		m_walker->on_key_down(direction == CW ?
+			Menu::Walker::UP_KEY :
+			Menu::Walker::DOWN_KEY);
+	else
+		m_walker->on_key_down(direction == CW ?
+			Menu::Walker::DOWN_KEY :
+			Menu::Walker::UP_KEY);
 }

@@ -25,6 +25,7 @@
 #include "Cosa/OutputPin.hh"
 #include "Cosa/LCD.hh"
 
+#include <UniversalLcd.h>
 #include <Canvas.h>
 #include "System5x7.hh"
 
@@ -68,7 +69,7 @@
  * 1. Product Specification, Philips Semiconductors, 1999 Apr 12.
  * https://www.sparkfun.com/datasheets/LCD/Monochrome/Nokia5110.pdf
  */
-class PCD8544 : public LCD::Device {
+class PCD8544 : public UniversalLcd {
 public:
   /** Display size. */
   static const uint8_t WIDTH = 84;
@@ -150,28 +151,6 @@ public:
   virtual void set_cursor(uint8_t x, uint8_t y);
 
   /**
-   * Get current text font.
-   * @return font setting.
-   */
-  Font* get_text_font() const
-  {
-    return (m_font);
-  }
-
-  /**
-   * Set text font. Returns previous setting.
-   * @param[in] font.
-   * @return previous font setting.
-   */
-  Font* set_text_font(Font* font)
-    __attribute__((always_inline))
-  {
-    Font* previous = m_font;
-    m_font = font;
-    return (previous);
-  }
-
-  /**
    * Draw icon in the current mode. The icon must be stored in program
    * memory with width, height and data.
    * @param[in] bp
@@ -239,9 +218,7 @@ protected:
   static const uint8_t script[] PROGMEM;
 
   /** Display pins and state. */
-  LCD::IO* m_io;		//!< Display adapter.
   OutputPin m_dc;		//!< Data/command output pin.
-  Font* m_font;			//!< Font.
 
   /**
    * Set the given command code.
@@ -262,6 +239,9 @@ protected:
    * @param[in] count number of bytes to fill.
    */
   void fill(uint8_t data, uint16_t count);
+
+  virtual uint16_t width_pixels();
+  virtual uint16_t height_pixels();
 };
 
 #endif

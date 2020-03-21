@@ -27,6 +27,7 @@
 #include <Rotary.h>
 #include "Cosa/Button.hh"
 #include "Cosa/Keypad.hh"
+#include "UniversalLcd.hh"
 
 /**
  * LCD Menu abstraction. Allows definition of menus with sub-menus,
@@ -39,10 +40,12 @@ public:
     ITEM,			//!< Menu item/symbol.
     ITEM_LIST,			//!< Menu item/enum list.
     ONE_OF,			//!< Menu enumeration variable (one-of).
-    ZERO_OR_MANY,		//!< Menu bitset variable (zero-or-many).
     BCD_RANGE,			//!< Menu bcd(2) range variable.
     INT_RANGE,			//!< Menu integer range variable.
-    ACTION			//!< Menu action.
+    ACTION,			//!< Menu action.
+    GO_TO_PARENT,
+    CHECKBOX,
+    TEXT
   } __attribute__((packed));
 
   /** Menu item header. Also used for enumeration symbols. */
@@ -60,19 +63,34 @@ public:
   };
   typedef const PROGMEM item_list_t* item_list_P;
 
+  /** Go to parent menu */
+  struct go_to_parent_t {
+      item_t item;		//!< Item header(GO_TO_PARENT).
+  };
+  
+  /** Checkbox item. */
+  struct checkbox_t {
+      item_t item;		//!< Item header(CHECKBOX).
+      bool* value;		//!< Pointer to value.
+  };
+  typedef const PROGMEM checkbox_t* checkbox_P;
+
   /** Enumeration variable symbols list (one-of). */
   struct one_of_t {
     item_t item;		//!< Item header(ONE_OF).
     item_vec_P list;		//!< Item list in program memory.
     uint16_t* value;		//!< Pointer to value.
+    bool edit_mode_enabled;
   };
   typedef const PROGMEM one_of_t* one_of_P;
   static void print(IOStream& outs, one_of_P var);
 
-  /** Zero-or-many variable symbols list, Item header(ZERO_OR_MANY). */
-  typedef one_of_t zero_or_many_t;
-  typedef const PROGMEM zero_or_many_t* zero_or_many_P;
-  static void print(IOStream& outs, zero_or_many_P var, bool selected, uint8_t bv);
+  static void print_item(IOStream& outs, UniversalLcd& lcd, str_P name, str_P value_pgm, const char* value, bool is_selected, bool is_edited);
+
+  /** Text */
+  struct text_t {
+      item_t item;		//!< Item header(ONE_OF).
+  };
 
   /** Bcd(2) range variable. */
   struct bcd_range_t {
@@ -128,19 +146,22 @@ public:
     Menu::item_list_P m_stack[STACK_MAX];
     uint8_t m_top;
 
+    /** Number of menu items, that scrolled out of the screen */
+    uint8_t m_scroll;
+
     /** Current menu list item index. */
     uint8_t m_ix;
 
-    /** Current menu bitset index. */
-    uint8_t m_bv;
-
     /** Item selection state. */
-    bool m_selected;
+    bool m_is_edit_mode;
 
-    /** Output stream for menu printout. */
-    IOStream m_out;
+    /**  */
+    UniversalLcd& m_display;
 
-    void on_key_down(uint8_t nr, zero_or_many_P var);
+    /**  */
+    IOStream m_display_stream;
+
+    void print_menu();
 
   public:
     /** Menu walker key index (same as LCDkeypad map for simplicity). */
@@ -158,12 +179,12 @@ public:
      * @param[in] lcd device.
      * @param[in] root menu item list.
      */
-    Walker(LCD::Device* lcd, item_list_P root) :
+    Walker(UniversalLcd& display, item_list_P root) :
       m_top(0),
       m_ix(0),
-      m_bv(0),
-      m_selected(false),
-      m_out(lcd)
+      m_is_edit_mode(false),
+      m_display(display),
+      m_display_stream(IOStream((LCD::Device*)&display))
     {
       m_stack[m_top] = root;
     }
@@ -191,13 +212,17 @@ public:
      */
     void begin(bool flag = true)
     {
-      if (flag) m_out << clear << *this;
+        if (flag)
+        {
+            //m_lcd.display_clear();
+            print_menu();
+        }
     }
 
     /**
      * Get current menu item type.
      */
-    Menu::type_t type();
+     Menu::type_t type();
   };
 
   /**
@@ -312,7 +337,24 @@ public:
   };
 };
 
+const char go_to_parent_name[] __PROGMEM = "..";
+
+//const Menu::item_P go_to_parent_item __PROGMEM = {
+static const Menu::go_to_parent_t go_to_parent_item __PROGMEM = {
+{
+  Menu::GO_TO_PARENT,
+  (str_P)go_to_parent_name
+  }
+};
+
 /**
+ * Support macro to add a menu item in program memory, that
+ * on selection navigates to parent menu item.
+ */
+#define MENU_GO_TO_PARENT_ITEM()					\
+  &go_to_parent_item.item,
+ 
+ /**
  * Support macro to start the definition of a menu in program memory.
  * Used in the form:
  *   MENU_BEGIN(var,name)
@@ -403,32 +445,31 @@ public:
  * @param[in] name string for menu one-of variable.
  * @param[in] value variable with runtime value.
  */
-#define MENU_ONE_OF(type,var,name,value)		\
+#define MENU_ONE_OF(type,var,name,value,edit_mode_enabled)		\
   const char var ## _name[] __PROGMEM = name;		\
   const Menu::one_of_t var __PROGMEM = {		\
   {							\
     Menu::ONE_OF,					\
     (str_P) var ## _name				\
   },							\
-  type ## _list,					\
-  &value						\
+  type ## _list,				\
+  &value,						\
+  edit_mode_enabled				\
 };
 
-/**
- * Support macro to define a menu zero-or-many variable.
- * @param[in] type enumeration list.
- * @param[in] var menu zero-or-many variable to create.
- * @param[in] name string for menu zero-or-many variable.
- * @param[in] value variable with runtime value.
- */
-#define MENU_ZERO_OR_MANY(type,var,name,value)		\
+ /**
+  * Support macro to define a checkbox menu variable.
+  * @param[in] var menu checkbox variable to create.
+  * @param[in] name string for checkbox.
+  * @param[in] value variable with runtime value.
+  */
+#define MENU_CHECKBOX(var,name,value)		\
   const char var ## _name[] __PROGMEM = name;		\
-  const Menu::zero_or_many_t var __PROGMEM = {		\
+  const Menu::checkbox_t var __PROGMEM = {		\
   {							\
-    Menu::ZERO_OR_MANY,					\
+    Menu::CHECKBOX,					\
     (str_P) var ## _name				\
   },							\
-  type ## _list,					\
   &value						\
 };
 
@@ -467,4 +508,19 @@ public:
   },							\
   &obj							\
   };
+
+ /**
+  * Support macro to define a menu action in program memory.
+  * @param[in] var menu action item to create.
+  * @param[in] name string of menu item.
+  */
+#define MENU_TEXT(var,name)			\
+  const char var ## _name[] __PROGMEM = name;		\
+  const Menu::text_t var __PROGMEM = {		\
+  {							\
+    Menu::TEXT,					\
+    (str_P) var ## _name				\
+  }							\
+  };
+
 #endif
